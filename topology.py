@@ -1,9 +1,9 @@
 import networkx as nx
 import numpy as np
 import sys
-from math import radians, sin, cos, sqrt, atan2
+import math
 import pandas as pd
-from sklearn.cluster import KMeans
+import matplotlib.pyplot as plt
 
 
 def read_file(file):
@@ -12,33 +12,39 @@ def read_file(file):
     return lines
 
 def haversine_distance(lat1, lon1, lat2, lon2):
-    # Convert latitude and longitude from degrees to radians
-    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+     
+    # distance between latitudes
+    # and longitudes
+    dLat = (lat2 - lat1) * math.pi / 180.0
+    dLon = (lon2 - lon1) * math.pi / 180.0
+ 
+    # convert to radians
+    lat1 = (lat1) * math.pi / 180.0
+    lat2 = (lat2) * math.pi / 180.0
+ 
+    # apply formulae
+    a = (pow(math.sin(dLat / 2), 2) +
+         pow(math.sin(dLon / 2), 2) *
+             math.cos(lat1) * math.cos(lat2))
+    rad = 6371
+    c = 2 * math.asin(math.sqrt(a))
+    return abs(rad * c)
 
-    # Haversine formula
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
-    c = 2 * atan2(sqrt(a), sqrt(1 - a))
-
-    # Radius of the Earth in kilometers (mean value)
-    R = 6371.0
-
-    # Calculate the distance
-    distance = R * c
-
-    return distance
-
-def distance(p1, p2,graph):
+def distance(p1, p2,graph,centroids):
     lat1=float(p1[2])
     long1=float(p1[4])
     
     lat2=float(p2[2])
     long2=float(p2[4])
-    
+    CC_time=0
+    for c in centroids:
+        CC_distance=haversine_distance(float(c[2]),float(c[4]),lat2,long2)
+        CC_time+=(CC_distance/(10*1000))
     delay=graph.get_edge_data(p1[0],p2[0])
-    if delay==None:
-        link_label=10*1000
+    
+    link_label=1
+    if delay==None:   
+        link_label=1e-10
     else:
         if 'LinkLabel' in delay.keys():
             link_label=delay['LinkLabel']
@@ -47,13 +53,15 @@ def distance(p1, p2,graph):
                 link_label = float(link_label.replace("Gbps", "")) * 1000  
             elif "Mbps" in link_label:
                 link_label = float(link_label.replace("Mbps", ""))
+                
         else:
-            link_label=155
+            link_label=5*1000
     
     dist=haversine_distance(lat1,long1,lat2,long2)
     
-    return (dist/link_label)
-def convert_to_graph(file_data):
+    return 0.7*(dist/link_label)+0.3*(CC_time)
+
+def main(file_data):
     graph=nx.parse_gml(file_data)
     # print("Nodes",graph.nodes(data=True))
     # print("Edges",graph.edges(data=True))
@@ -63,27 +71,74 @@ def convert_to_graph(file_data):
         temp= [
         node_id,
         node_data.get('Country', ''),
-         node_data.get('Latitude', ''),
+        node_data.get('Latitude', ''),
         node_data.get('Internal', ''),
         node_data.get('Longitude', '')
-        # Add more attributes as needed
         ]
         
         node_list.append(temp)
-        # print(node_list)
-    print(node_list[:3])
-    centroids=initialize(node_list,3,graph)
-    k_means(node_list,3,distance,centroids,graph)
+    print(node_list[0],'\n')
+    wcss=[]
+    for k in range(1,11):
+        cent=initialize(node_list,k,graph)
+        # print(cent[0],"\n")
+        centroids,labels,wcs=k_means(node_list,k,distance,cent,graph)
+        wcss.append(wcs)
+    # print(labels)
+    plt.plot(range(1, 11), wcss, marker='o')
+    plt.title('Elbow Method for Optimal k')
+    plt.xlabel('Number of Clusters (k)')    
+    plt.ylabel('Within-Cluster Sum of Squares (WCSS)')
+    plt.show()
+    second_derivative = np.diff(np.diff(wcss))
+    optimal_k = np.argmax(second_derivative) + 2
+    print(optimal_k)
+    
+    cent=initialize(node_list,2,graph)
+    print(cent)
+    centroids,labels,wcs=k_means(node_list,2,distance,cent,graph)
+    # pos = nx.spring_layout(graph) 
+    # nx.draw(graph, pos, with_labels=True, node_color='skyblue', node_size=800, font_size=10, font_color='black', font_weight='bold', edge_color='gray')
+    # plt.show()
+    
+    print(labels)    
+    latitude=[float(c[2]) for c in node_list]
+    longitude=[float(c[4]) for c in node_list]
+    
+    c_latitude=[float(c[2]) for c in centroids]
+    c_longitude=[float(c[4]) for c in centroids]
+    
+    cent_latitude=[float(c[2]) for c in cent]
+    cent_longitude=[float(c[4]) for c in cent]
+    # print(cent_latitude)
+    
+    plt.scatter(longitude,latitude,c=labels)
+    plt.scatter(c_longitude,c_latitude,color='red') 
+    # plt.scatter(cent_longitude,cent_latitude,color='orange')
+    
+    
+    
+    
+    
+    plt.xlabel('Longitude')
+    plt.ylabel('Latitude')
+    plt.show()
 
-def k_means(X, k, distance_func,centroids,graph,max_iters=10, tol=1e-4):
+
+
+
+
+
+def k_means(X, k, distance_func,centroids,graph,max_iters=1000, tol=1e-4):
     
     old_labels=np.zeros(len(X))
     for _ in range(max_iters):
-        # Assign each data point to the closest centroid using the custom distance function
-        distances = np.array([[distance_func(x, c,graph) for c in centroids] for x in X])
-        print(distances)
+        
+        distances = np.array([[distance_func(x, c,graph,centroids) for c in centroids] for x in X])
+        # print(distances)
+        # print(distances)
         labels = np.argmin(distances, axis=1)
-        print(labels)
+        # print(labels)
         new_centroids=[]
         lat_mean=0
         long_mean=0
@@ -95,78 +150,50 @@ def k_means(X, k, distance_func,centroids,graph,max_iters=10, tol=1e-4):
                     count+=1
                     lat_mean=lat_mean+float(X[j][2])
                     long_mean=long_mean+float(X[j][4])
-            new_centroids.append(['','Australia',lat_mean/count,'1',long_mean/count])
+            if count!=0:
+                new_centroids.append(['','Australia',lat_mean/count,'1',long_mean/count])
         if (old_labels==labels).all():
             break
         old_labels=labels
         centroids=new_centroids
-    print(centroids)
-    return centroids
+    # print(centroids)
+    wcss=0
+    # print(labels)
+    for i in range(len(labels)):
+        
+        c_d=centroids[labels[i]]
+        p_d=X[i]
+        wcss+=distance_func(p_d,c_d,graph,centroids)**2
+              
+    return centroids,labels,wcss
                     
-                
-                
-            
-        
-        
-        
-        
-
-    
 
 
-# initialization algorithm
 def initialize(data, k, graph):
-    '''
-    initialized the centroids for K-means++
-    inputs:
-        data - numpy array of data points having shape (200, 2)
-        k - number of clusters 
-    '''
-    ## initialize the centroids list and add
-    ## a randomly selected data point to the list
+    
+    # np.random.seed(10)
     data=np.array(data)
     centroids = []
     centroids.append(data[np.random.randint(
             data.shape[0]), :])
-    # plot(data, np.array(centroids))
-  
-    ## compute remaining k - 1 centroids
     for c_id in range(k - 1):
-         
-        ## initialize a list to store distances of data
-        ## points from nearest centroid
         dist = []
         for i in range(data.shape[0]):
             point = data[i, :]
             d = sys.maxsize
-             
-            ## compute distance of 'point' from each of the previously
-            ## selected centroid and store the minimum distance
             for j in range(len(centroids)):
-                temp_dist = distance(point, centroids[j],graph)
+                temp_dist = distance(point, centroids[j],graph,centroids)
                 d = min(d, temp_dist)
             dist.append(d)
-             
-        ## select data point with maximum distance as our next centroid
+
         dist = np.array(dist)
         next_centroid = data[np.argmax(dist), :]
         centroids.append(next_centroid)
         dist = []
-        # plot(data, np.array(centroids))
+        
     return centroids
-  
 
 
-
-
-
-
-
-
-
-
-
-    
 if __name__=="__main__":
     file_data=read_file('gml')
-    convert_to_graph(file_data)
+    main(file_data)
