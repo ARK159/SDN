@@ -217,7 +217,7 @@ def assign_controllers(labels, num_controllers):
 def create_mininet_topology(controller_assignments):
     net = Mininet(topo=None, build=False)
 
-    # Assuming you have controllers with names 'c0', 'c1', 'c2', etc.
+    
     controller_names = set(controller_assignments.values())
     for controller_name in controller_names:
         controller = net.addController(controller_name, controller=RemoteController, ip='127.0.0.1', port=6633)
@@ -227,7 +227,7 @@ def create_mininet_topology(controller_assignments):
     for switch_id, controller_id in controller_assignments.items():
         switches[switch_id] = net.addSwitch(switch_id, cls=OVSKernelSwitch)
 
-    # Add hosts (modify based on your requirements)
+    
     h1 = net.addHost('h1', cls=Host)
     h2 = net.addHost('h2', cls=Host)
 
@@ -237,24 +237,23 @@ def create_mininet_topology(controller_assignments):
         net.addLink(switches[switch_id], h2)
         net.get(switch_id).start([net.get(controller_id)])
 
-    # Additional configurations...
+    
 
     return net
 
 
 
 if __name__ == "__main__":
-    # Read GML file, perform clustering, and assign controllers
+    
     file_data = read_file('gml')
     graph = nx.parse_gml(file_data)
     node_list, labels = cluster_nodes(graph)
     controller_assignments = assign_controllers(labels, num_controllers=4)
 
-    # Create Mininet topology based on clustering and controller assignments
+    
     mininet_topology = create_mininet_topology(controller_assignments)
 
-    # Post-configure switches and hosts, and start CLI
-    # You need to add any additional configurations here
+    
 
     mininet_topology.build()
     CLI(mininet_topology)
