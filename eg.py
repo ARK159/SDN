@@ -1,28 +1,37 @@
 from mininet.net import Mininet
-from mininet.node import RemoteController
-from mininet.topo import Topo
+from mininet.node import Controller, OVSKernelSwitch, Host
 from mininet.link import TCLink
+from mininet.cli import CLI
+from mininet.log import setLogLevel
 import networkx as nx
 import numpy as np
 import sys
-import math
-import pandas as pd
+import math 
 import matplotlib.pyplot as plt
-from mininet.log import setLogLevel
+from mininet.node import RemoteController
+
+ # Add this line
+
+# Rest of your code...
 
 
-setLogLevel('info')
-
-def read_file(file_path):
+def read_file(file):
+    file_path = 'file.gml'  # Change this line with the correct path
     with open(file_path, 'r') as file:
         lines = file.readlines()
     return lines
 
+
 def haversine_distance(lat1, lon1, lat2, lon2):
+    # distance between latitudes and longitudes
     dLat = (lat2 - lat1) * math.pi / 180.0
     dLon = (lon2 - lon1) * math.pi / 180.0
+
+    # convert to radians
     lat1 = (lat1) * math.pi / 180.0
     lat2 = (lat2) * math.pi / 180.0
+
+    # apply formulae
     a = (pow(math.sin(dLat / 2), 2) +
          pow(math.sin(dLon / 2), 2) *
          math.cos(lat1) * math.cos(lat2))
@@ -33,6 +42,7 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 def distance(p1, p2, graph, centroids):
     lat1 = float(p1[2])
     long1 = float(p1[4])
+
     lat2 = float(p2[2])
     long2 = float(p2[4])
     CC_time = 0
@@ -42,7 +52,7 @@ def distance(p1, p2, graph, centroids):
     delay = graph.get_edge_data(p1[0], p2[0])
 
     link_label = 1
-    if delay is None:
+    if delay == None:
         link_label = 1e-10
     else:
         if 'LinkLabel' in delay.keys():
@@ -56,55 +66,61 @@ def distance(p1, p2, graph, centroids):
             link_label = 5 * 1000
 
     dist = haversine_distance(lat1, long1, lat2, long2)
+
     return 0.7 * (dist / link_label) + 0.3 * (CC_time)
 
-def create_mininet_topology(graph, k):
-    class CustomTopology(Topo):
-        def __init__(self, graph, k, **opts):
-            super(CustomTopology, self).__init__(**opts)
-            self.graph = graph
-            self.k = k
-            switch_count = 1
+def main(file_data):
+    graph = nx.parse_gml(file_data)
+    node_list = []
+    for node_id, node_data in graph.nodes(data=True):
+        temp = [
+            node_id,
+            node_data.get('Country', ''),
+            node_data.get('Latitude', ''),
+            node_data.get('Internal', ''),
+            node_data.get('Longitude', '')
+        ]
 
-            switch_names = {}
-            host_count = 1
-            for node_id, node_data in graph.nodes(data=True):
-                switch_name = f'S{switch_count}'
-                switch_dpid = format(switch_count, '016x')  # Set a unique dpid for each switch
-                switch_count += 1
+        node_list.append(temp)
 
-                switch_names[node_id] = switch_name
+    wcss = []
+    for k in range(1, 11):
+        cent = initialize(node_list, k, graph)
+        centroids, labels, wcs = k_means(node_list, k, distance, cent, graph)
+        wcss.append(wcs)
 
-                self.addSwitch(switch_name, dpid=switch_dpid)
+    # Determine optimal k
+    second_derivative = np.diff(np.diff(wcss))
+    optimal_k = np.argmax(second_derivative) + 2
 
-                for i in range(2):
-                    host_name = f'H{host_count}'
-                    host_count += 1
-                    self.addHost(host_name)
-                    self.addLink(host_name, switch_name)
+    cent = initialize(node_list, optimal_k, graph)
+    centroids, labels, wcs = k_means(node_list, optimal_k, distance, cent, graph)
 
-            for edge in graph.edges(data=True):
-                source, target, edge_data = edge
-                link_label = edge_data.get('LinkLabel', '1Gbps')
-                bandwidth = 10 if "Gbps" in link_label else (0.0025 if "Mbps" in link_label else 0.000155)
-                self.addLink(switch_names[source], switch_names[target], bw=bandwidth, delay='1ms')
+    # Visualize clustering
+    latitude = [float(c[2]) for c in node_list]
+    longitude = [float(c[4]) for c in node_list]
+    c_latitude = [float(c[2]) for c in centroids]
+    c_longitude = [float(c[4]) for c in centroids]
 
-    topo = CustomTopology(graph, k)
-    net = Mininet(topo=topo, link=TCLink)
+    plt.scatter(longitude, latitude, c=labels)
+    plt.scatter(c_longitude, c_latitude, color='red')
+    plt.xlabel('Longitude')
+    plt.ylabel('Latitude')
+    plt.show()
 
-    controllers = []
-    for i in range(k):
-        controller = RemoteController(f'c{i + 1}', ip='127.0.0.1', port=6653 + i)
-        controllers.append(controller)
-        net.addController(controller)
+    # Assign controllers to clusters
+    num_controllers = 4
+    controller_assignments = assign_controllers(labels, num_controllers)
+    print(controller_assignments)
+    print("Controllers in Mininet topology:", net.controllers)
 
-    # Connect switches to controllers
-    for i, switch in enumerate(net.switches):
-        controller_index = i % k  
-        controller = controllers[controller_index]
-        net.addLink(switch, controller)
 
-    return net
+    # Create Mininet topology
+    mininet_topology = create_mininet_topology(controller_assignments)
+    mininet_topology.build()
+    CLI(mininet_topology)
+    mininet_topology.stop()
+
 def k_means(X, k, distance_func, centroids, graph, max_iters=1000, tol=1e-4):
     old_labels = np.zeros(len(X))
     for _ in range(max_iters):
@@ -131,6 +147,7 @@ def k_means(X, k, distance_func, centroids, graph, max_iters=1000, tol=1e-4):
         c_d = centroids[labels[i]]
         p_d = X[i]
         wcss += distance_func(p_d, c_d, graph, centroids) ** 2
+
     return centroids, labels, wcss
 
 def initialize(data, k, graph):
@@ -146,17 +163,15 @@ def initialize(data, k, graph):
                 temp_dist = distance(point, centroids[j], graph, centroids)
                 d = min(d, temp_dist)
             dist.append(d)
+
         dist = np.array(dist)
         next_centroid = data[np.argmax(dist), :]
         centroids.append(next_centroid)
         dist = []
+
     return centroids
 
-def main(file_path):
-    gml_data = read_file(file_path)
-    graph = nx.parse_gml(gml_data)
-    
-    # Find the optimal k
+def cluster_nodes(graph):
     node_list = []
     for node_id, node_data in graph.nodes(data=True):
         temp = [
@@ -166,6 +181,7 @@ def main(file_path):
             node_data.get('Internal', ''),
             node_data.get('Longitude', '')
         ]
+
         node_list.append(temp)
 
     wcss = []
@@ -182,15 +198,69 @@ def main(file_path):
 
     second_derivative = np.diff(np.diff(wcss))
     optimal_k = np.argmax(second_derivative) + 2
-    print(f"Optimal k: {optimal_k}")
+    print(optimal_k)
 
-    # Create Mininet topology
-    mininet_topo = create_mininet_topology(graph, optimal_k)
+    cent = initialize(node_list, optimal_k, graph)
+    centroids, labels, wcs = k_means(node_list, optimal_k, distance, cent, graph)
 
-    # Start Mininet
-    mininet_topo.start()
-    mininet_topo.pingAll()
-    mininet_topo.stop()
+    return node_list, labels
+
+
+def assign_controllers(labels, num_controllers):
+    controller_assignments = {}
+    for i in range(len(labels)):
+        cluster_id = labels[i]
+        controller_assignments[f'switch{i + 1}'] = f'c{cluster_id % num_controllers}'
+
+    return controller_assignments
+
+def create_mininet_topology(controller_assignments):
+    net = Mininet(topo=None, build=False)
+
+    # Assuming you have controllers with names 'c0', 'c1', 'c2', etc.
+    controller_names = set(controller_assignments.values())
+    for controller_name in controller_names:
+        controller = net.addController(controller_name, controller=RemoteController, ip='127.0.0.1', port=6633)
+
+    # Create switches based on clustering
+    switches = {}
+    for switch_id, controller_id in controller_assignments.items():
+        switches[switch_id] = net.addSwitch(switch_id, cls=OVSKernelSwitch)
+
+    # Add hosts (modify based on your requirements)
+    h1 = net.addHost('h1', cls=Host)
+    h2 = net.addHost('h2', cls=Host)
+
+    # Create links based on clustering
+    for switch_id, controller_id in controller_assignments.items():
+        net.addLink(switches[switch_id], h1)
+        net.addLink(switches[switch_id], h2)
+        net.get(switch_id).start([net.get(controller_id)])
+
+    # Additional configurations...
+
+    return net
+
+
 
 if __name__ == "__main__":
-    main('file.gml') 
+    # Read GML file, perform clustering, and assign controllers
+    file_data = read_file('gml')
+    graph = nx.parse_gml(file_data)
+    node_list, labels = cluster_nodes(graph)
+    controller_assignments = assign_controllers(labels, num_controllers=4)
+
+    # Create Mininet topology based on clustering and controller assignments
+    mininet_topology = create_mininet_topology(controller_assignments)
+
+    # Post-configure switches and hosts, and start CLI
+    # You need to add any additional configurations here
+
+    mininet_topology.build()
+    CLI(mininet_topology)
+    mininet_topology.stop()
+
+
+if __name__ == "__main__":
+    file_data = read_file('file.gml')
+    main(file_data)
